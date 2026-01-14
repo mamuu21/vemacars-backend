@@ -81,3 +81,6 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 WAPBRIDGE_TOKEN = os.getenv("WAPBRIDGE_TOKEN")
 WAPBRIDGE_BASE_URL = os.getenv("WAPBRIDGE_BASE_URL")
 
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
