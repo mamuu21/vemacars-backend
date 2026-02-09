@@ -1,46 +1,69 @@
 from django.http import JsonResponse, HttpResponse
-from .whatsapp import send_whatsapp_message
 from django.views.decorators.csrf import csrf_exempt
 import json
+import logging
+from django.conf import settings
+from .whatsapp_cloud import whatsapp_service
+
+logger = logging.getLogger(__name__)
 
 @csrf_exempt
 def whatsapp_webhook(request):
-    if request.method != "POST":
-        return HttpResponse(status=405)
+    # 1. Verification Challenge (GET)
+    if request.method == "GET":
+        mode = request.GET.get('hub.mode')
+        token = request.GET.get('hub.verify_token')
+        challenge = request.GET.get('hub.challenge')
 
-    try:
-        data = json.loads(request.body)
-        
-        # 1. Prevent loop: Check if this is an INCOMING message
-        # Wapbridge usually sends 'event': 'message_received' or similar
-        if data.get("event") != "message.received":
-            return JsonResponse({"status": "ignored_event"})
+        # You should define WHATSAPP_VERIFY_TOKEN in env/settings. 
+        # For now, I'll default to a simple check or 'vemacars_verify_token'
+        verify_token = getattr(settings, 'WHATSAPP_VERIFY_TOKEN', 'vemacars_secret')
 
-        msg_obj = data.get("data", {})
-        text = msg_obj.get("body", "").lower()
-        sender = msg_obj.get("from") # Format usually '255xxx@c.us'
-        
-        # Clean the sender string to just numbers
-        sender_phone = sender.split('@')[0] if sender else None
-
-        if not sender_phone or not text:
-            return JsonResponse({"status": "invalid_data"})
-
-        # 2. Basic Bot Logic
-        if "booking" in text:
-            reply = "🚗 To book a car, visit vemacars.com"
-        elif "hello" in text or "hi" in text:
-            reply = "Hello 👋 Welcome to Vema Cars. How can I help you today?"
+        if mode == 'subscribe' and token == verify_token:
+            logger.info("Webhook verified successfully")
+            return HttpResponse(challenge, status=200)
         else:
-            return JsonResponse({"status": "no_reply_needed"})
+            logger.warning(f"Webhook Verification Failed. Received: {token}, Expected: {verify_token}")
+            return HttpResponse('Forbidden', status=403)
 
-        # 3. Send the reply
-        send_whatsapp_message(to_number=sender_phone, message=reply)
+    # 2. Event Notifications (POST)
+    if request.method == "POST":
+        try:
+            # Enhanced Logging for Debugging
+            body_unicode = request.body.decode('utf-8')
+            logger.info(f"Received Webhook Payload: {body_unicode}")
+            
+            data = json.loads(body_unicode)
+            
+            # Extract basic info first
+            entry = data.get('entry', [])
+            if not entry:
+                logger.warning("Ignored webhook: No 'entry' field found.")
+                return JsonResponse({"status": "ignored_bad_format"})
+            
+            # Use the service to extract standardized message data
+            message_data = whatsapp_service.extract_message_data(data)
+            
+            if message_data:
+                # Direct synchronous call since we removed async from service
+                result = whatsapp_service.process_incoming_message(message_data)
+                
+                if result.get('success'):
+                    return JsonResponse({"status": "processed"})
+                else:
+                    logger.error(f"Processing failed: {result.get('error')}")
+                    return JsonResponse({"status": "error", "error": result.get('error')}, status=500)
+            
+            logger.info("Ignored webhook: No valid message data extracted.")
+            return JsonResponse({"status": "ignored_no_message"})
+            
+            return JsonResponse({"status": "ignored_no_message"})
 
-    except Exception as e:
-        print(f"Webhook Error: {e}")
-        
-    return JsonResponse({"status": "ok"})
+        except Exception as e:
+            logger.error(f"Webhook Error: {e}")
+            return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+    return HttpResponse(status=405)
 
 @csrf_exempt
 def send_message_from_frontend(request):
@@ -48,14 +71,23 @@ def send_message_from_frontend(request):
     Action: User clicks 'Book' or 'Contact' on Next.js
     """
     if request.method == "POST":
-        data = json.loads(request.body)
-        phone = data.get("phone")
-        message = data.get("message", "Hello, I am interested in a car rental.")
+        try:
+            data = json.loads(request.body)
+            phone = data.get("phone")
+            message = data.get("message", "Hello, I am interested in a car rental.")
 
-        if not phone:
-            return JsonResponse({"error": "Phone number is required"}, status=400)
+            if not phone:
+                return JsonResponse({"error": "Phone number is required"}, status=400)
 
-        result = send_whatsapp_message(to_number=phone, message=message)
-        return JsonResponse({"status": "processed", "api_response": result})
+            # Use new service
+            result = whatsapp_service.send_text_message(to=phone, message=message)
+            
+            if result['success']:
+                return JsonResponse({"status": "processed", "api_response": result['data']})
+            else:
+                 return JsonResponse({"status": "error", "error": result['error']}, status=500)
+
+        except Exception as e:
+             return JsonResponse({"status": "error", "message": str(e)}, status=500)
     
     return HttpResponse(status=405)
