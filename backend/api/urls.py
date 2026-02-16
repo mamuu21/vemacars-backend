@@ -22,7 +22,14 @@ urlpatterns = [
     path('customers/', CustomerList.as_view(), name='customer-list'),
     path('customers/<int:pk>/', CustomerDetail.as_view(), name='customer-detail'),
 
-    # Invoices
+   # Invoices
     path('invoices/', InvoiceList.as_view(), name='invoice-list'),
     path('invoices/<int:pk>/', InvoiceDetail.as_view(), name='invoice-detail'),
+
+    # Bookings
+    path('bookings/', BookingListCreate.as_view(), name='booking-list-create'),
+    path('bookings/<str:reference_code>/', BookingDetail.as_view(), name='booking-detail'),
+
+    # Dashboard
+    path('dashboard/stats/', DashboardSummaryView.as_view(), name='dashboard-stats'),
 ]
